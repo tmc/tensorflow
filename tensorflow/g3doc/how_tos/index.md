@@ -15,7 +15,7 @@ A step-by-step walk through of the details of using TensorFlow infrastructure
 to train models at scale, using MNIST handwritten digit recognition as a toy
 example.
 
-[View Tutorial](mnist/tf/index.md)
+[View Tutorial](../tutorials/mnist/tf/index.md)
 
 
 ## TensorBoard: Visualizing Learning
@@ -42,6 +42,13 @@ This tutorial describes the three main methods of getting data into your
 TensorFlow program: Feeding, Reading and Preloading.
 
 [View Tutorial](reading_data/index.md)
+
+## Distributed TensorFlow
+
+This tutorial describes how to execute TensorFlow programs using a cluster of
+TensorFlow servers.
+
+[View Tutorial](distributed/index.md)
 
 
 ## Threading and Queues

@@ -20,6 +20,7 @@ from __future__ import division
 from __future__ import print_function
 
 import contextlib
+import traceback
 
 import six
 
@@ -51,7 +52,8 @@ class _VariableStore(object):
 
   def get_variable(self, name, shape=None, dtype=dtypes.float32,
                    initializer=None, regularizer=None, reuse=None,
-                   trainable=True, collections=None, caching_device=None):
+                   trainable=True, collections=None, caching_device=None,
+                   validate_shape=True):
     """Gets an existing variable with these parameters or create a new one.
 
     If a variable with the given name is already stored, we return the stored
@@ -85,6 +87,9 @@ class _VariableStore(object):
         device.  If not `None`, caches on another device.  Typical use is to
         cache on the device where the Ops using the Variable reside, to
         deduplicate copying through `Switch` and other conditional statements.
+      validate_shape: If False, allows the variable to be initialized with a
+        value of unknown shape. If True, the default, the shape of initial_value
+        must be known.
 
     Returns:
       The created or existing variable.
@@ -108,8 +113,13 @@ class _VariableStore(object):
     if name in self._vars:
       # Here we handle the case when returning an existing variable.
       if should_check and not reuse:
+        tb = self._vars[name].op.traceback[::-1]
+        # Throw away internal tf entries and only take a few lines.
+        tb = [x for x in tb if "tensorflow/python" not in x[0]][:3]
         raise ValueError("Variable %s already exists, disallowed."
-                         " Did you mean to set reuse=True in VarScope?" % name)
+                         " Did you mean to set reuse=True in VarScope? "
+                         "Originally defined at:\n\n%s" % (
+                             name, "".join(traceback.format_list(tb))))
       found_var = self._vars[name]
       if not shape.is_compatible_with(found_var.get_shape()):
         raise ValueError("Trying to share variable %s, but specified shape %s"
@@ -138,14 +148,19 @@ class _VariableStore(object):
     with ops.control_dependencies(None):
       if initializing_from_value:
         init_val = initializer
+        variable_dtype = None
       else:
-        with ops.name_scope(name + "/Initializer/"):
-          init_val = initializer(shape.as_list(), dtype=dtype)
+        init_val = lambda: initializer(shape.as_list(), dtype=dtype)
+        variable_dtype = dtype.base_dtype
 
     # Create the variable.
-    v = variables.Variable(init_val, name=name, trainable=trainable,
+    v = variables.Variable(initial_value=init_val,
+                           name=name,
+                           trainable=trainable,
                            collections=collections,
-                           caching_device=caching_device)
+                           caching_device=caching_device,
+                           dtype=variable_dtype,
+                           validate_shape=validate_shape)
     self._vars[name] = v
     logging.info("Created variable %s with shape %s and init %s", v.name,
                  format(shape), initializer)
@@ -154,7 +169,7 @@ class _VariableStore(object):
     if regularizer:
       with ops.name_scope(name + "/Regularizer/"):
         loss = regularizer(v)
-      if loss:
+      if loss is not None:
         logging.info("Applied regularizer to %s and added the result %s to "
                      "REGULARIZATION_LOSSES.", v.name, loss.name)
         ops.add_to_collection(ops.GraphKeys.REGULARIZATION_LOSSES, loss)
@@ -232,7 +247,8 @@ class VariableScope(object):
 
   def get_variable(self, var_store, name, shape=None, dtype=dtypes.float32,
                    initializer=None, regularizer=None,
-                   trainable=True, collections=None, caching_device=None):
+                   trainable=True, collections=None, caching_device=None,
+                   validate_shape=True):
     """Gets an existing variable with this name or create a new one."""
     if initializer is None:
       initializer = self._initializer
@@ -248,7 +264,8 @@ class VariableScope(object):
       return var_store.get_variable(
           full_name, shape=shape, dtype=dtype, initializer=initializer,
           regularizer=regularizer, reuse=self.reuse, trainable=trainable,
-          collections=collections, caching_device=caching_device)
+          collections=collections, caching_device=caching_device,
+          validate_shape=validate_shape)
 
 
 _VARSTORE_KEY = ("__variable_store",)
@@ -276,7 +293,7 @@ def _get_default_variable_store():
 
 def get_variable(name, shape=None, dtype=dtypes.float32, initializer=None,
                  regularizer=None, trainable=True,
-                 collections=None):
+                 collections=None, validate_shape=True):
   """Gets an existing variable with these parameters or create a new one.
 
   This function prefixes the name with the current variable scope
@@ -313,6 +330,9 @@ def get_variable(name, shape=None, dtype=dtypes.float32, initializer=None,
       `GraphKeys.TRAINABLE_VARIABLES` (see tf.Variable).
     collections: List of graph collections keys to add the Variable to.
       Defaults to `[GraphKeys.VARIABLES]` (see tf.Variable).
+    validate_shape: If False, allows the variable to be initialized with a
+        value of unknown shape. If True, the default, the shape of initial_value
+        must be known.
 
   Returns:
     The created or existing variable.
@@ -325,7 +345,7 @@ def get_variable(name, shape=None, dtype=dtypes.float32, initializer=None,
   return get_variable_scope().get_variable(
       _get_default_variable_store(), name, shape=shape, dtype=dtype,
       initializer=initializer, regularizer=regularizer, trainable=trainable,
-      collections=collections)
+      collections=collections, validate_shape=validate_shape)
 
 
 @contextlib.contextmanager
@@ -353,7 +373,8 @@ def _pure_variable_scope(name_or_scope, reuse=None, initializer=None,
 
   """
   get_variable_scope()  # Ensure that a default exists, then get a pointer.
-  default_varscope = ops.get_collection(_VARSCOPE_KEY)
+  # Get the reference to the collection as we want to modify it in place.
+  default_varscope = ops.get_collection_ref(_VARSCOPE_KEY)
   try:
     old = default_varscope[0]
     reuse = reuse or old.reuse  # Re-using is inherited by sub-scopes.
@@ -498,18 +519,19 @@ def variable_scope(name_or_scope, reuse=None, initializer=None,
 
 # pylint: disable=g-doc-return-or-yield
 @contextlib.contextmanager
-def variable_op_scope(values, name, default_name, initializer=None,
-                      regularizer=None, caching_device=None):
+def variable_op_scope(values, name_or_scope, default_name=None,
+                      initializer=None, regularizer=None, caching_device=None,
+                      reuse=None):
   """Returns a context manager for defining an op that creates variables.
 
   This context manager validates that the given `values` are from the
   same graph, ensures that that graph is the default graph, and pushes a
   name scope and a variable scope.
 
-  If `name` is not None, it is used as is in the variable scope. If `name`
-  is None, then `default_name` is used.  In that case, if the same name has been
-  previously used in the same scope, it will made unique be appending `_N` to
-  it.
+  If `name_or_scope` is not None, it is used as is in the variable scope. If
+  `scope` is None, then `default_name` is used.  In that case, if the same name
+  has been previously used in the same scope, it will made unique be appending
+  `_N` to it.
 
   This is intended to be used when defining generic ops and so reuse is always
   inherited.
@@ -517,8 +539,8 @@ def variable_op_scope(values, name, default_name, initializer=None,
   For example, to define a new Python op called `my_op_with_vars`:
 
   ```python
-  def my_op_with_vars(a, b, name=None):
-    with tf.variable_op_scope([a, b], name, "MyOp") as scope:
+  def my_op_with_vars(a, b, scope=None):
+    with tf.variable_op_scope([a, b], scope, "MyOp") as scope:
       a = tf.convert_to_tensor(a, name="a")
       b = tf.convert_to_tensor(b, name="b")
       c = tf.get_variable('c')
@@ -528,13 +550,16 @@ def variable_op_scope(values, name, default_name, initializer=None,
 
   Args:
     values: The list of `Tensor` arguments that are passed to the op function.
-    name: The name argument that is passed to the op function, this name is not
-      uniquified in the variable scope.
-    default_name: The default name to use if the `name` argument is `None`, this
-      name will be uniquified.
+    name_or_scope: The name argument that is passed to the op function,
+      this name_or_scope is not uniquified in the variable scope.
+    default_name: The default name to use if the `name_or_scope` argument is
+      `None`, this name will be uniquified. If name_or_scope is provided it
+      won't be used and therefore it is not required and can be None.
     initializer: The  default initializer to pass to variable scope.
     regularizer: The default regularizer for variables within this scope.
     caching_device: The default caching device for variables within this scope.
+    reuse: `True` or `None`; if `True`, we go into reuse mode for this scope as
+      well as all sub-scopes; if `None`, we just inherit the parent scope reuse.
 
 
   Returns:
@@ -545,16 +570,18 @@ def variable_op_scope(values, name, default_name, initializer=None,
       a reuse scope, or if reuse is not `None` or `True`.
     TypeError: when the types of some arguments are not appropriate.
   """
-  if default_name is None:
-    raise TypeError("default_name cannot be None")
+  if default_name is None and not name_or_scope:
+    raise TypeError("If default_name is None then name_or_scope is required")
   g = ops._get_graph_from_inputs(values)  # pylint: disable=protected-access
   with g.as_default():
-    if name:
-      with variable_scope(name, initializer=initializer,
+    if name_or_scope:
+      with variable_scope(name_or_scope, reuse=reuse, initializer=initializer,
                           regularizer=regularizer,
                           caching_device=caching_device) as vs:
         yield vs
     else:
+      if reuse:
+        raise ValueError("reuse=True cannot be used without a name_or_scope")
       with ops.name_scope(default_name) as scope:
         count = len(default_name.split("/"))
         scoped_name = "/".join(scope.split("/")[-count - 1:-1])

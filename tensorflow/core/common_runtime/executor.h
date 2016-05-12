@@ -18,6 +18,7 @@ limitations under the License.
 
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/framework/rendezvous.h"
+#include "tensorflow/core/framework/session_state.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/lib/core/notification.h"
@@ -80,17 +81,13 @@ class Executor {
   // RunAsync() dispatches closures to "runner". Typically, "runner"
   // is backed up by a bounded threadpool.
   struct Args {
-    // Executors are sometimes instantiated for initialization work
-    // like constant folding that is logically outside any computation
-    // step, and SpecialStepIds lists the ids used for those steps.
-    enum SpecialStepIds {
-      CONSTANT_FOLDING_STEP_ID = -1,
-    };
     int64 step_id = 0;
     Rendezvous* rendezvous = nullptr;
     StepStatsCollector* stats_collector = nullptr;
     FunctionCallFrame* call_frame = nullptr;
     CancellationManager* cancellation_manager = nullptr;
+    SessionState* session_state = nullptr;
+    TensorStore* tensor_store = nullptr;
 
     typedef std::function<void()> Closure;
     typedef std::function<void(Closure)> Runner;
@@ -173,6 +170,7 @@ class ExecutorBarrier {
 
   void WhenDone(const Status& s) {
     bool error = false;
+    Rendezvous* error_rendez = nullptr;
     StatusCallback done = nullptr;
     Status status;
     {
@@ -182,6 +180,8 @@ class ExecutorBarrier {
       // object by this thread only.
       if (status_.ok() && !s.ok()) {
         error = true;
+        error_rendez = rendez_;
+        error_rendez->Ref();
         status_ = s;
       }
 
@@ -192,10 +192,13 @@ class ExecutorBarrier {
         done = done_cb_;
         done_cb_ = nullptr;
       }
+
       status = status_;
     }
+
     if (error) {
-      rendez_->StartAbort(status);
+      error_rendez->StartAbort(status);
+      error_rendez->Unref();
     }
     if (done != nullptr) {
       delete this;

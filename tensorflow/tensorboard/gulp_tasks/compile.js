@@ -28,19 +28,11 @@ var tsProject = ts.createProject('./tsconfig.json', {
 
 module.exports = function() {
   var isComponent = filter(['components/**/*.js']);
-  var isLib = filter(['lib/js/**/*.js']);
-  var isApp = filter(['app/**/*.js']);
 
-  var tsResult = tsProject.src()
-                     .pipe(ts(tsProject));
-  return merge([
-    // Duplicate all component code to live next to the ts file
-    // (makes polymer imports very clean)
-    tsResult.js
+  return tsProject.src()
+           .pipe(ts(tsProject))
+           .js
             .pipe(isComponent)
-            .pipe(gulp.dest('.')),
-    tsResult.js
-            .pipe(isLib)
-            .pipe(gulp.dest('.')),
-  ]);
+            .pipe(gulp.dest('.'))
+
 }

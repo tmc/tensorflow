@@ -29,6 +29,7 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/rendezvous_mgr.h"
 #include "tensorflow/core/framework/cancellation.h"
 #include "tensorflow/core/framework/graph.pb.h"
+#include "tensorflow/core/framework/session_state.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -40,6 +41,7 @@ limitations under the License.
 
 namespace tensorflow {
 
+class CostModel;
 class Device;
 class ThreadPool;
 
@@ -60,6 +62,14 @@ class DirectSession : public Session {
                            const std::vector<string>& target_nodes,
                            std::vector<Tensor>* outputs) override;
 
+  // NOTE: Experimental and subject to change.
+  ::tensorflow::Status Run(const ::tensorflow::RunOptions& run_options,
+                           const NamedTensorList& inputs,
+                           const std::vector<string>& output_names,
+                           const std::vector<string>& target_nodes,
+                           std::vector<Tensor>* outputs,
+                           RunMetadata* run_metadata) override;
+
   // NOTE: PRunSetup and PRun are added to support partial execution. This
   // feature is experimental and subject to change.
   ::tensorflow::Status PRunSetup(const std::vector<string>& input_names,
@@ -69,7 +79,14 @@ class DirectSession : public Session {
   ::tensorflow::Status PRun(const string& handle, const NamedTensorList& inputs,
                             const std::vector<string>& output_names,
                             std::vector<Tensor>* outputs) override;
+
   ::tensorflow::Status Close() override;
+
+  // NOTE: This is a temporary api that is only meant to enable testing.
+  // This api will be replaced with better ones soon, so DO NOT USE
+  const std::unordered_map<const Graph*, CostModel*>& GetCostModels() const {
+    return cost_models_;
+  }
 
  private:
   typedef DirectSession ME;
@@ -113,11 +130,14 @@ class DirectSession : public Session {
   // is "notified" when all executors are done. 'pending_inputs' are the set
   // of pending feeds and 'pending_outputs' are the set of pending fetches.
   struct RunState {
-    Status status;
+    mutex mu_;
+    Status status GUARDED_BY(mu_);
     IntraProcessRendezvous* rendez = nullptr;
+    StepStatsCollector* collector = nullptr;
     Notification executors_done;
     std::unordered_set<string> pending_inputs;
     std::unordered_set<string> pending_outputs;
+    TensorStore tensor_store;
 
     RunState(const std::vector<string>& input_names,
              const std::vector<string>& output_names) {
@@ -130,15 +150,7 @@ class DirectSession : public Session {
       }
     }
 
-    ~RunState() {
-      if (rendez != nullptr) {
-        if (!executors_done.HasBeenNotified()) {
-          rendez->StartAbort(errors::Cancelled("PRun cancellation"));
-          executors_done.WaitForNotification();
-        }
-        rendez->Unref();
-      }
-    }
+    ~RunState();
   };
 
   struct RunStateArgs {
@@ -186,6 +198,10 @@ class DirectSession : public Session {
       const std::vector<string>& fetches,
       const ExecutorsAndKeys* executors_and_keys, const RunState* run_state);
 
+  // Use the appropriate WaitForNotification function based on whether
+  // operation_timeout_in_ms is greater than 0.
+  void WaitForNotification(RunState* run_state, int64 timeout_in_ms);
+
   const SessionOptions options_;
 
   // Device structures.
@@ -216,6 +232,9 @@ class DirectSession : public Session {
   std::unordered_map<string, RunState*> partial_runs_
       GUARDED_BY(executor_lock_);
 
+  // This holds all the tensors that are currently alive in the session.
+  SessionState session_state_;
+
   CancellationManager* cancellation_manager_;
 
   // Saves and restores device placements for stateful nodes.
@@ -233,6 +252,12 @@ class DirectSession : public Session {
 
   // For generating step ids that are unique across all sessions.
   static std::atomic_int_fast64_t step_id_counter_;
+
+  // Global timeout for all blocking operations in this session.
+  const int64 operation_timeout_in_ms_ = 0;
+
+  std::unordered_map<const Graph*, CostModel*> cost_models_
+      GUARDED_BY(executor_lock_);
 
   TF_DISALLOW_COPY_AND_ASSIGN(DirectSession);
 };

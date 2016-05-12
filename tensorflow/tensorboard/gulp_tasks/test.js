@@ -17,8 +17,7 @@ var gulp = require('gulp');
 var tester = require('web-component-tester').test;
 
 module.exports = function(done) {
-  tester({suites: ['components/tf-test/'],
-          plugins: {local: {}, sauce: false}}, function(error) {
+  tester({}, function(error) {
     if (error) {
       // Pretty error for gulp.
       error = new Error(error.message || error);

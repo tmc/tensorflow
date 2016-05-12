@@ -175,10 +175,10 @@
               <tf-node-list-item
                   class="non-control-list-item"
                   card-node="[[_node]]"
-                  item-node="[[_getNode(item, graphHierarchy)]]"
-                  edge-label="[[_getPredEdgeLabel(item)]]"
-                  item-render-info="[[_getRenderInfo(item, renderHierarchy)]]"
-                  name="[[item]]"
+                  item-node="[[item.node]]"
+                  edge-label="[[item.edgeLabel]]"
+                  item-render-info="[[item.renderInfo]]"
+                  name="[[item.name]]"
                   item-type="predecessors"
                   color-by="[[colorBy]]"
                   template-index="[[_templateIndex]]">
@@ -195,16 +195,15 @@
                 </paper-icon-button>
                 Control dependencies
               </div>
-              <iron-collapse opened="{{_openedControlPred}}">
+              <iron-collapse opened="{{_openedControlPred}}" no-animation>
                 <template is="dom-if" if="{{_openedControlPred}}" restamp="true">
                   <iron-list class="sub-list" items="[[_predecessors.control]]">
                     <template>
                       <tf-node-list-item
                           card-node="[[_node]]"
-                          item-node="[[_getNode(item, graphHierarchy)]]"
-                          item-render-info=
-                              "[[_getRenderInfo(item, renderHierarchy)]]"
-                          name="[[item]]"
+                          item-node="[[item.node]]"
+                          item-render-info="[[item.renderInfo]]"
+                          name="[[item.name]]"
                           item-type="predecessors"
                           color-by="[[colorBy]]"
                           template-index="[[_templateIndex]]">
@@ -226,10 +225,10 @@
               <tf-node-list-item
                   class="non-control-list-item"
                   card-node="[[_node]]"
-                  item-node="[[_getNode(item, graphHierarchy)]]"
-                  edge-label="[[_getSuccEdgeLabel(item)]]"
-                  item-render-info="[[_getRenderInfo(item, renderHierarchy)]]"
-                  name="[[item]]"
+                  item-node="[[item.node]]"
+                  edge-label="[[item.edgeLabel]]"
+                  item-render-info="[[item.renderInfo]]"
+                  name="[[item.name]]"
                   item-type="successor"
                   color-by="[[colorBy]]"
                   template-index="[[_templateIndex]]">
@@ -246,16 +245,15 @@
                 </paper-icon-button>
                 Control dependencies
               </div>
-              <iron-collapse opened="{{_openedControlSucc}}">
+              <iron-collapse opened="{{_openedControlSucc}}" no-animation>
                 <template is="dom-if" if="{{_openedControlSucc}}" restamp="true">
                   <iron-list class="sub-list" items="[[_successors.control]]">
                     <template>
                       <tf-node-list-item
                           card-node="[[_node]]"
-                          item-node="[[_getNode(item, graphHierarchy)]]"
-                          item-render-info=
-                              "[[_getRenderInfo(item, renderHierarchy)]]"
-                          name="[[item]]"
+                          item-node="[[item.node]]"
+                          item-render-info="[[item.renderInfo]]"
+                          name="[[item.name]]"
                           item-type="successors"
                           color-by="[[colorBy]]"
                           template-index="[[_templateIndex]]">
@@ -396,21 +394,65 @@
         },
         _getAttributes: function(node) {
           this.async(this._resizeList.bind(this, "#attributesList"));
-          return node && node.attr ? node.attr.map(function(entry) {
-            return {key: entry.key, value: JSON.stringify(entry.value)};
-          }) : [];
-
+          if (!node || !node.attr) {
+            return [];
+          }
+          var attrs = [];
+          _.each(node.attr, function(entry) {
+            // Unpack the "too large" attributes into separate attributes
+            // in the info card, with values "too large to show".
+            if (entry.key === tf.graph.LARGE_ATTRS_KEY) {
+              attrs = attrs.concat(entry.value.list.s.map(function(key) {
+                return {key: key, value: "Too large to show..."};
+              }));
+            } else {
+              attrs.push({
+                key: entry.key,
+                value: JSON.stringify(entry.value)
+              });
+            }
+          });
+          return attrs;
         },
         _getDevice: function(node) {
           return node ? node.device : null;
         },
         _getSuccessors: function(node, hierarchy) {
           this.async(this._resizeList.bind(this, "#inputsList"));
-          return node ? hierarchy.getSuccessors(node.name) : [[], []];
+          if (!node) {
+            return {regular: [], control: []}
+          }
+          return this._convertEdgeListToEdgeInfoList(
+            hierarchy.getSuccessors(node.name), false);
         },
         _getPredecessors: function(node, hierarchy) {
           this.async(this._resizeList.bind(this, "#outputsList"));
-          return node ? hierarchy.getPredecessors(node.name) : [[], []];
+          if (!node) {
+            return {regular: [], control: []}
+          }
+          return this._convertEdgeListToEdgeInfoList(
+            hierarchy.getPredecessors(node.name), true);
+        },
+        _convertEdgeListToEdgeInfoList: function(list, isPredecessor) {
+          return {
+            regular: list.regular.map(function(name) {
+              return {
+                name: name,
+                node: this._getNode(name, this.graphHierarchy),
+                edgeLabel: isPredecessor
+                  ? this._getPredEdgeLabel(name)
+                  : this._getSuccEdgeLabel(name),
+                renderInfo: this._getRenderInfo(name, this.renderHierarchy)
+              }
+            }, this),
+            control: list.control.map(function(name) {
+              return {
+                name: name,
+                node: this._getNode(name, this.graphHierarchy),
+                renderInfo: this._getRenderInfo(name, this.renderHierarchy)
+              }
+            }, this)
+          };
         },
         _getSubnodes: function(node) {
           return node && node.metagraph ? node.metagraph.nodes() : null;

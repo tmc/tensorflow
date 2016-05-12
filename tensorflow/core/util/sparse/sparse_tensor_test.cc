@@ -79,6 +79,65 @@ TEST(SparseTensorTest, DimComparatorSorts) {
   EXPECT_EQ(sorting, std::vector<int64>({0, 3, 2, 1, 4}));
 }
 
+TEST(SparseTensorTest, SparseTensorInvalidIndicesType) {
+  int N = 5;
+  const int NDIM = 3;
+  Tensor ix(DT_INT32, TensorShape({N, NDIM}));
+  Tensor vals(DT_STRING, TensorShape({N}));
+
+  EXPECT_DEATH(SparseTensor(ix, vals, TensorShape({10, 10, 10}), {0, 1, 2}),
+               "indices must be type int64");
+}
+
+TEST(SparseTensorTest, SparseTensorInvalidIndicesShape) {
+  int N = 5;
+  const int NDIM = 3;
+  Tensor ix(DT_INT64, TensorShape({N, NDIM, 1}));
+  Tensor vals(DT_STRING, TensorShape({N}));
+
+  EXPECT_DEATH(SparseTensor(ix, vals, TensorShape({10, 10, 10}), {0, 1, 2}),
+               "indices must be a matrix");
+}
+
+TEST(SparseTensorTest, SparseTensorInvalidValues) {
+  int N = 5;
+  const int NDIM = 3;
+  Tensor ix(DT_INT64, TensorShape({N, NDIM}));
+  Tensor vals(DT_STRING, TensorShape({N, 1}));
+
+  EXPECT_DEATH(SparseTensor(ix, vals, TensorShape({10, 10, 10}), {0, 1, 2}),
+               "vals must be a vec");
+}
+
+TEST(SparseTensorTest, SparseTensorInvalidN) {
+  int N = 5;
+  const int NDIM = 3;
+  Tensor ix(DT_INT64, TensorShape({N, NDIM}));
+  Tensor vals(DT_STRING, TensorShape({N - 1}));
+
+  EXPECT_DEATH(SparseTensor(ix, vals, TensorShape({10, 10, 10}), {0, 1, 2}),
+               "indices and values rows .* must match");
+}
+
+TEST(SparseTensorTest, SparseTensorInvalidOrder) {
+  int N = 5;
+  const int NDIM = 3;
+  Tensor ix(DT_INT64, TensorShape({N, NDIM}));
+  Tensor vals(DT_STRING, TensorShape({N}));
+
+  EXPECT_DEATH(SparseTensor(ix, vals, TensorShape({10, 10, 10}), {0, 1}),
+               "Order length must be SparseTensor rank");
+}
+TEST(SparseTensorTest, SparseTensorInvalidShape) {
+  int N = 5;
+  const int NDIM = 3;
+  Tensor ix(DT_INT64, TensorShape({N, NDIM}));
+  Tensor vals(DT_STRING, TensorShape({N}));
+
+  EXPECT_DEATH(SparseTensor(ix, vals, TensorShape({10, 10}), {0, 1, 2}),
+               "Shape rank must be SparseTensor rank");
+}
+
 TEST(SparseTensorTest, SparseTensorConstruction) {
   int N = 5;
   const int NDIM = 3;
@@ -103,7 +162,8 @@ TEST(SparseTensorTest, SparseTensorConstruction) {
   SparseTensor st(ix, vals, shape, order);
   Status st_indices_valid = st.IndicesValid();
   EXPECT_FALSE(st_indices_valid.ok());
-  EXPECT_EQ("Index 2 is out of order.", st_indices_valid.error_message());
+  EXPECT_EQ("indices[2] = [2,0,0] is out of order",
+            st_indices_valid.error_message());
 
   // Regardless of how order is updated; so long as there are no
   // duplicates, the resulting indices are valid.
@@ -201,7 +261,8 @@ TEST(SparseTensorTest, ValidateIndicesFindsInvalid) {
   st.Reorder<string>(order);
   Status st_indices_valid = st.IndicesValid();
   EXPECT_FALSE(st_indices_valid.ok());
-  EXPECT_EQ("Index 1 is repeated.", st_indices_valid.error_message());
+  EXPECT_EQ("indices[1] = [0,0,0] is repeated",
+            st_indices_valid.error_message());
 
   ix_orig(1, 2) = 1;
   ix_t = ix_orig;
@@ -213,7 +274,8 @@ TEST(SparseTensorTest, ValidateIndicesFindsInvalid) {
   st.Reorder<string>(order);
   st_indices_valid = st.IndicesValid();
   EXPECT_FALSE(st_indices_valid.ok());  // first index now (0, 0, 1)
-  EXPECT_EQ("Index 1 is repeated.", st_indices_valid.error_message());
+  EXPECT_EQ("indices[1] = [0,0,1] is repeated",
+            st_indices_valid.error_message());
 }
 
 TEST(SparseTensorTest, SparseTensorCheckBoundaries) {
@@ -242,14 +304,18 @@ TEST(SparseTensorTest, SparseTensorCheckBoundaries) {
   Status st_indices_valid = st.IndicesValid();
   EXPECT_FALSE(st_indices_valid.ok());
   // Error message references index 4 because of the call to Reorder.
-  EXPECT_EQ("Index 4 is out of bounds.", st_indices_valid.error_message());
+  EXPECT_EQ(
+      "indices[4] = [11,0,0] is out of bounds: need 0 <= index < [10,10,10]",
+      st_indices_valid.error_message());
 
   ix_t(0, 0) = -1;
   ix.matrix<int64>() = ix_t;
   st.Reorder<string>(order);
   st_indices_valid = st.IndicesValid();
   EXPECT_FALSE(st_indices_valid.ok());
-  EXPECT_EQ("Index 0 is out of bounds.", st_indices_valid.error_message());
+  EXPECT_EQ(
+      "indices[0] = [-1,0,0] is out of bounds: need 0 <= index < [10,10,10]",
+      st_indices_valid.error_message());
 
   ix_t(0, 0) = 0;
   ix.matrix<int64>() = ix_t;

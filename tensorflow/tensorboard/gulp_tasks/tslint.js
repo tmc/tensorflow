@@ -15,11 +15,10 @@ limitations under the License.
 
 var gulp = require('gulp');
 var tslint = require('gulp-tslint');
-var constants = require('./constants.js');
 
 module.exports = function(strict) {
   return function() {
-    return gulp.src(constants.all_typescript)
+    return gulp.src('components/tf-*/**/*.ts')
                .pipe(tslint())
                .pipe(tslint.report('verbose', {
                   emitError: strict,

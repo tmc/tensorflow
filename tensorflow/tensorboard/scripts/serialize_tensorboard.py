@@ -25,10 +25,12 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import gzip
 import json
 import os
 import os.path
 import shutil
+import StringIO
 import threading
 import urllib
 
@@ -48,9 +50,17 @@ will be written""")
 tf.flags.DEFINE_boolean('overwrite', False, """Whether to remove and overwrite
 TARGET if it already exists.""")
 
+tf.flags.DEFINE_boolean(
+    'purge_orphaned_data', True, 'Whether to purge data that '
+    'may have been orphaned due to TensorBoard restarts. '
+    'Disabling purge_orphaned_data can be used to debug data '
+    'disappearance.')
 FLAGS = tf.flags.FLAGS
 
 BAD_CHARACTERS = "#%&{}\\/<>*? $!'\":@+`|="
+DEFAULT_SUFFIX = '.json'
+IMAGE_SUFFIX = '.png'
+GRAPH_SUFFIX = '.pbtxt'
 
 
 def Url(route, params):
@@ -78,15 +88,23 @@ class TensorBoardStaticSerializer(object):
     EnsureDirectoryExists(os.path.join(target_path, 'data'))
     self.path = target_path
 
-  def GetAndSave(self, url):
+  def GetAndSave(self, url, save_suffix, unzip=False):
     """GET the given url. Serialize the result at clean path version of url."""
-    self.connection.request('GET', '/data/' + url)
+    self.connection.request('GET',
+                            '/data/' + url,
+                            headers={'content-type': 'text/plain'})
     response = self.connection.getresponse()
-    destination = self.path + '/data/' + Clean(url)
+    destination = self.path + '/data/' + Clean(url) + save_suffix
 
     if response.status != 200:
       raise IOError(url)
-    content = response.read()
+
+    if unzip:
+      s = StringIO.StringIO(response.read())
+      content = gzip.GzipFile(fileobj=s).read()
+    else:
+      content = response.read()
+
     with open(destination, 'w') as f:
       f.write(content)
     return content
@@ -94,7 +112,7 @@ class TensorBoardStaticSerializer(object):
   def GetRouteAndSave(self, route, params=None):
     """GET given route and params. Serialize the result. Return as JSON."""
     url = Url(route, params)
-    return json.loads(self.GetAndSave(url))
+    return json.loads(self.GetAndSave(url, DEFAULT_SUFFIX))
 
   def Run(self):
     """Serialize everything from a TensorBoard backend."""
@@ -111,14 +129,15 @@ class TensorBoardStaticSerializer(object):
           if tag_type == 'graph':
             # in this case, tags is a bool which specifies if graph is present.
             if tags:
-              self.GetRouteAndSave('graph', {run: run})
+              url = Url('graph', {'run': run})
+              self.GetAndSave(url, GRAPH_SUFFIX, unzip=True)
           elif tag_type == 'images':
             for t in tags:
               images = self.GetRouteAndSave('images', {'run': run, 'tag': t})
               for im in images:
                 url = 'individualImage?' + im['query']
                 # pull down the images themselves.
-                self.GetAndSave(url)
+                self.GetAndSave(url, IMAGE_SUFFIX)
           else:
             for t in tags:
               # Save this, whatever it is :)
@@ -161,7 +180,8 @@ def main(unused_argv=None):
 
   PrintAndLog('About to load Multiplexer. This may take some time.')
   multiplexer = event_multiplexer.EventMultiplexer(
-      size_guidance=server.TENSORBOARD_SIZE_GUIDANCE)
+      size_guidance=server.TENSORBOARD_SIZE_GUIDANCE,
+      purge_orphaned_data=FLAGS.purge_orphaned_data)
   server.ReloadMultiplexer(multiplexer, path_to_run)
 
   PrintAndLog('Multiplexer load finished. Starting TensorBoard server.')

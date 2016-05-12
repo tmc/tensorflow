@@ -18,8 +18,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import math
-
 import numpy as np
 
 from tensorflow.python.framework import test_util
@@ -27,8 +25,9 @@ from tensorflow.python.ops import constant_op
 from tensorflow.python.ops import math_ops
 from tensorflow.python.platform import googletest
 
-exp = math.exp
-log = math.log
+exp = np.exp
+log = np.log
+
 
 class ReduceTest(test_util.TensorFlowTestCase):
 

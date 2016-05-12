@@ -24,8 +24,6 @@ import time
 import numpy as np
 import tensorflow as tf
 
-from tensorflow.python.client import graph_util
-from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import sparse_ops
 # pylint: enable=g-bad-import-order,unused-import
 
@@ -132,7 +130,7 @@ def _sparse_tensor_dense_vs_dense_matmul_benchmark_dense(
   t0 = tf.constant(0)
   v0 = tf.constant(0.0)
   def _timeit(iterations, _):
-    (_, final) = control_flow_ops.While(
+    (_, final) = tf.while_loop(
         lambda t, _: t < iterations, body, (t0, v0),
         parallel_iterations=1, back_prop=False)
     return [final]
@@ -152,7 +150,7 @@ def _sparse_tensor_dense_vs_dense_matmul_benchmark_sparse(
   t0 = tf.constant(0)
   v0 = tf.constant(0.0)
   def _timeit(iterations, _):
-    (_, final) = control_flow_ops.While(
+    (_, final) = tf.while_loop(
         lambda t, _: t < iterations, body, (t0, v0),
         parallel_iterations=1, back_prop=False)
     return [final]
@@ -192,7 +190,7 @@ def sparse_tensor_dense_vs_dense_matmul_benchmark(
   else:
     with tf.Session("", config=config, graph=tf.Graph()) as sess:
       if not use_gpu:
-        with tf.device(graph_util.pin_to_cpu):
+        with tf.device("/cpu:0"):
           x_t = tf.constant(x)
           y_t = tf.constant(y)
           ops_fn = _sparse_tensor_dense_vs_dense_matmul_benchmark_dense(
@@ -207,7 +205,7 @@ def sparse_tensor_dense_vs_dense_matmul_benchmark(
   # Using sparse_tensor_dense_matmul.
   with tf.Session("", config=config, graph=tf.Graph()) as sess:
     if not use_gpu:
-      with tf.device(graph_util.pin_to_cpu):
+      with tf.device("/cpu:0"):
         x_ind = tf.constant(np.vstack(np.where(x)).astype(np.int64).T)
         x_val = tf.constant(x[np.where(x)])
         x_shape = tf.constant(np.array(x.shape).astype(np.int64))
